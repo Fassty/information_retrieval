@@ -2,7 +2,9 @@ from collections import defaultdict
 
 import numpy as np
 from scipy.sparse import diags, csr_matrix
+from scipy.sparse.linalg import norm
 from sklearn.preprocessing import normalize
+from sklearn.metrics.pairwise import linear_kernel
 from functools import partial
 
 from inverted_index.utils import logn, top_k_csr, divide_rows_csr
@@ -61,6 +63,14 @@ class SMARTVectorizer:
             'b': self._pivoted_char_length
         }
         self.tf, self.df, self.idf = None, None, None
+
+    @property
+    def slope(self):
+        return self._slope
+
+    @slope.setter
+    def slope(self, value):
+        self._slope = value
 
     @property
     def document_weighting(self):
@@ -221,25 +231,29 @@ class SMARTVectorizer:
         self._calculate_df(tf)
         return self
 
-    def transform(self, docs, weighting_scheme=None):
+    def transform(self, docs, weighting_scheme=None, query=False):
         if weighting_scheme:
             self.weighting_scheme = weighting_scheme
             self.idf = None
-        tf_weights = self._calculate_tf_weights(docs)
-        df_weights = self._calculate_df_weights(docs)
+        tf_weights = self._calculate_tf_weights(docs, query=query)
+        df_weights = self._calculate_df_weights(docs, query=query)
         document_weights = tf_weights * df_weights
-        document_weights = self._normalize_weights(docs, document_weights)
+        document_weights = self._normalize_weights(docs, document_weights, query=query)
         return document_weights
 
     def fit_transform(self, docs):
         self.fit(docs)
         return self.transform(docs)
 
-    def get_k_most_relevant(self, query, weights, k=1000):
-        tf_weights = self._calculate_tf_weights([query], query=True)
-        df_weights = self._calculate_df_weights([query], query=True)
-        query_weights = tf_weights * df_weights
-        query_weights = self._normalize_weights([query], query_weights, query=True)
+    def get_k_most_relevant(self, query, weights, query_expansion=0, k=1000):
+        if query_expansion:
+            new_query = []
+            for word in query:
+                word_idx = self.vocabulary[word]
+                cos_sims = linear_kernel(self.tf[word_idx] * self.idf[word_idx])
+        else:
+            query = [query]
+        query_weights = self.transform(query, query=True)
         ranking = query_weights * weights.T
         top_k_indices, top_k_sims = top_k_csr(ranking.data, ranking.indices, ranking.indptr, k)
         return top_k_indices.squeeze(), top_k_sims.squeeze()
