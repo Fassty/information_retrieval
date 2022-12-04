@@ -138,3 +138,12 @@ def preprocess_data(df: pd.DataFrame, funcs: List[Callable]):
             with open(func.LEMMAS_FN, 'wb') as f:
                 pickle.dump(func.lemmas, f)
     return df
+
+
+def remove_stopwords(document, lang='english'):
+    from stop_words import get_stop_words
+    sw = get_stop_words(lang)
+    if isinstance(document, pd.Series):
+        return [w for w in document['DATA'] if w not in sw]
+    else:
+        return [w for w in document if w not in sw]

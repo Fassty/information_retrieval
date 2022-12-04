@@ -23,9 +23,9 @@ def append_to_result_file(model_file, result_file, lang):
 
 
 if __name__ == '__main__':
-    RESULT_FN = 'run-1_en_wordnet_slope_eval.csv'
-    MODEL_DIR = 'wordnet_slope'
-    MODEL_NAME = None#'run-0_train_cs'
+    RESULT_FN = 'run-2_en_eval.csv'
+    MODEL_DIR = None#'udpipe_queryexp'
+    MODEL_NAME = 'run-2_train_en.res'
     LANG = 'en'
     with open(RESULT_FN, 'w') as handle:
         handle.write('scheme,map,P_10,PR_0,PR_10,PR_20,PR_30,PR_40,PR_50,PR_60,PR_70,PR_80,PR_90,PR_100\n')

@@ -3,6 +3,7 @@ import argparse
 import itertools
 import os.path
 import numpy as np
+from functools import partial
 
 from tqdm import tqdm
 tqdm.pandas()
@@ -10,18 +11,19 @@ tqdm.pandas()
 from inverted_index.utils import generate_gs_schemes, dict_to_str, product_dict
 from inverted_index.model import SMARTVectorizer, SMARTSearch
 from inverted_index.preprocessing import preprocess_data, whitespace_tokenize, remove_punctuation, UDPipeLemmatizer, \
-    MyWordNetLemmatizer
+    MyWordNetLemmatizer, remove_stopwords
 from inverted_index.parsing import load_documents, load_queries, query_result_to_trec
 
 parser = argparse.ArgumentParser()
-parser.add_argument('-q', "--query", default='topics-train_cs.xml', type=str, help="File including query topics.")
-parser.add_argument('-d', "--documents", default='documents_cs.lst', type=str, help="File including document filenames.")
-parser.add_argument('-r', "--run-name", default='run-1_cs', type=str, help="String identifying the experiment.")
-parser.add_argument('-o', "--output", default='run-1_train_cs_Ltb.res', type=str, help="Output file.")
-parser.add_argument('-s', "--weighting-scheme", default='dfn.dfn', type=str, help="Weighting scheme for inverted index."
+parser.add_argument('-q', "--query", default='topics-train_en.xml', type=str, help="File including query topics.")
+parser.add_argument('-d', "--documents", default='documents_en.lst', type=str, help="File including document filenames.")
+parser.add_argument('-r', "--run-name", default='run-2_en', type=str, help="String identifying the experiment.")
+parser.add_argument('-o', "--output", default='run-2_train_en.res', type=str, help="Output file.")
+parser.add_argument('-s', "--weighting-scheme", default='dtb.dtb', type=str, help="Weighting scheme for inverted index."
                                                                                   " (default: nnc.nnc = \"baseline\").")
 parser.add_argument('-g', "--grid-search", default=False, type=bool, help="Perform grid-search over params.")
 parser.add_argument('-l', "--lang", default=None, type=str, help="Use language model for English/Czech.")
+parser.add_argument('-D', "--use_description", default=True, type=bool, help="Use query description for retrieval.")
 
 
 model_param_grid = {
@@ -37,8 +39,8 @@ search_param_grid = {
     'gamma': [0.1]
 }
 
-data_transforms_cs = [UDPipeLemmatizer(), remove_punctuation]
-query_transforms_cs = [UDPipeLemmatizer().udpipe_tokenize_lemmatize]
+data_transforms_cs = [UDPipeLemmatizer(), remove_punctuation, partial(remove_stopwords, lang='czech')]
+query_transforms_cs = [UDPipeLemmatizer().udpipe_tokenize_lemmatize, remove_punctuation, partial(remove_stopwords, lang='czech')]
 model_params_cs = {
     'weighting_scheme': 'dtb.dtb', 'slope': 0.1, 'min_df': 5, 'max_df': 0.5,
 }
@@ -46,8 +48,8 @@ search_params_cs = {
     'n_pseudo_relevance': 5, 'alpha': 0.5, 'beta': 0.1, 'gamma': 0.1
 }
 
-data_transforms_en = [MyWordNetLemmatizer()]
-query_transforms_en = [MyWordNetLemmatizer().lemmatize_text]
+data_transforms_en = [MyWordNetLemmatizer(), partial(remove_stopwords, lang='english')]
+query_transforms_en = [MyWordNetLemmatizer().lemmatize_text, partial(remove_stopwords, lang='english')]
 model_params_en = {
     'weighting_scheme': 'dtb.dtb', 'slope': 0.1, 'min_df': 5, 'max_df': 0.8,
 }
@@ -76,7 +78,12 @@ def main(args):
     print('Loading queries')
     query_df = load_queries(args.query)
     print('Pre-processing data...')
-    query_df['title'] = query_df['title'].apply(query_transforms[0])
+    if not args.use_description:
+        query_df['query'] = query_df['title'].apply(query_transforms[0])
+    else:
+        query_df['query'] = query_df['title'] + '\n' + query_df['desc']
+        for transform in query_transforms:
+            query_df['query'] = query_df['query'].apply(transform)
     print()
 
     print('#' * 22)
@@ -96,7 +103,7 @@ def main(args):
                     else output_fn.rsplit('.', maxsplit=1)[0] + '_' + ws.replace('.', '_') + '.res'
                 print('Transforming documents and queries')
                 document_weights = model.transform(document_df['DATA'], weighting_scheme=ws)
-                query_weights = model.transform(query_df['title'], query=True)
+                query_weights = model.transform(query_df['query'], query=True)
 
                 for search_params in product_dict(**search_param_grid):
                     print(f'Retrieving most similar documents using: {search_params}')
@@ -115,7 +122,7 @@ def main(args):
         model.fit(document_df['DATA'])
 
         document_weights = model.transform(document_df['DATA'])
-        query_weights = model.transform(query_df['title'], query=True)
+        query_weights = model.transform(query_df['query'], query=True)
 
         search = SMARTSearch(**search_params)
         query_results = process_queries(search, document_weights, query_weights, document_df, query_df, args.run_name)
