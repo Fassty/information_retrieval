@@ -16,6 +16,13 @@ from tqdm import tqdm
 tqdm.pandas()
 
 
+def remap_word(word):
+    if word == 'Eura':
+        return 'euro'
+    else:
+        return word
+
+
 class UDPipeLemmatizer:
     def __init__(self):
         self.lemmas = None
@@ -44,7 +51,7 @@ class UDPipeLemmatizer:
                         time.sleep(1)
                 response = parse(response['result'])
                 for sentence in response:
-                    lemmas.extend([word['lemma'] for word in sentence])
+                    lemmas.extend([remap_word(word['lemma']) for word in sentence])
                 i += 1
         return lemmas
 

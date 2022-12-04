@@ -1,3 +1,4 @@
+import numbers
 from collections import defaultdict
 
 import numpy as np
@@ -5,7 +6,7 @@ from scipy.sparse import diags, csr_matrix
 from scipy.sparse.linalg import norm
 from sklearn.preprocessing import normalize
 from sklearn.metrics.pairwise import linear_kernel
-from functools import partial
+from functools import partial, lru_cache
 
 from inverted_index.utils import logn, top_k_csr, divide_rows_csr
 import time
@@ -18,6 +19,8 @@ class SMARTVectorizer:
             weighting_scheme='nnc.nnc',
             log_base=np.e,
             slope=0.5,
+            min_df=0,
+            max_df=1.0
     ):
         self.weighting_scheme = weighting_scheme
         # Word to index mapping
@@ -30,6 +33,8 @@ class SMARTVectorizer:
         self._avg_b = 0
         self._log_base = log_base
         self._slope = slope
+        self._min_df = min_df
+        self._max_df = max_df
         self._tf_weighting_mapping = {
             # Binary weight
             'b': self._tf_binary_weight,
@@ -63,14 +68,6 @@ class SMARTVectorizer:
             'b': self._pivoted_char_length
         }
         self.tf, self.df, self.idf = None, None, None
-
-    @property
-    def slope(self):
-        return self._slope
-
-    @slope.setter
-    def slope(self, value):
-        self._slope = value
 
     @property
     def document_weighting(self):
@@ -140,6 +137,28 @@ class SMARTVectorizer:
         self.df = df
         return df
 
+    def _remove_common(self, tf):
+        n_docs = tf.shape[0]
+        vocab_size = tf.shape[1]
+        min_df = self._min_df if isinstance(self._min_df, numbers.Integral) else self._min_df * n_docs
+        max_df = self._max_df if isinstance(self._max_df, numbers.Integral) else self._max_df * n_docs
+
+        mask = np.ones(len(self.df), dtype=bool)
+        mask &= self.df <= max_df
+        mask &= self.df >= min_df
+
+        new_indices = np.cumsum(mask) - 1
+        for term, old_index in list(self.vocabulary.items()):
+            if mask[old_index]:
+                self.vocabulary[term] = new_indices[old_index]
+            else:
+                del self.vocabulary[term]
+        tf = tf[:, np.where(mask)[0]]
+        new_vocab_size = tf.shape[1]
+        print(f'Vocab size reduction: {(1 - (new_vocab_size / vocab_size)) * 100:.2f}%')
+        self.df = None
+        self._calculate_df(tf)
+
     def _tf_binary_weight(self, docs):
         tf = self._calculate_tf(docs, fit=False)
         return tf.astype(bool).astype(int)
@@ -149,9 +168,7 @@ class SMARTVectorizer:
 
     def _tf_augmented(self, docs):
         tf = self._calculate_tf(docs, fit=False)
-        start_time = time.time()
         tf.data = 0.5 + 0.5 * divide_rows_csr(tf.data, tf.indices, tf.indptr, tf.max(axis=1).data)
-        print(f'Took: {time.time() - start_time:.3f} seconds')
         return tf
 
     def _tf_logarithmic(self, docs):
@@ -229,6 +246,7 @@ class SMARTVectorizer:
     def fit(self, docs):
         tf = self._calculate_tf(docs, fit=True)
         self._calculate_df(tf)
+        self._remove_common(tf)
         return self
 
     def transform(self, docs, weighting_scheme=None, query=False):
@@ -245,15 +263,42 @@ class SMARTVectorizer:
         self.fit(docs)
         return self.transform(docs)
 
-    def get_k_most_relevant(self, query, weights, query_expansion=0, k=1000):
-        if query_expansion:
-            new_query = []
-            for word in query:
-                word_idx = self.vocabulary[word]
-                cos_sims = linear_kernel(self.tf[word_idx] * self.idf[word_idx])
+
+class SMARTSearch:
+    def __init__(
+            self,
+            *,
+            n_pseudo_relevance: int = 0,
+            alpha: float = 0,
+            beta: float = 0,
+            gamma: float = 0
+    ):
+        self._n_pseudo_relevance = n_pseudo_relevance
+        self._alpha = alpha
+        self._beta = beta
+        self._gamma = gamma
+
+    def get_k_most_relevant(self, query_weights, document_weights, k=1000):
+        if self._n_pseudo_relevance > 0:
+            ranking = query_weights * document_weights.T
+            top_k_indices, _ = top_k_csr(ranking.data, ranking.indices, ranking.indptr, self._n_pseudo_relevance)
+            top_k_indices = top_k_indices.squeeze()
+
+            mask = np.ones(document_weights.shape[0], dtype=bool)
+            mask[top_k_indices] = False
+            relevant = document_weights[top_k_indices].mean(axis=0)
+            non_relevant = document_weights[mask].mean(axis=0)
+
+            if self._alpha == self._beta == self._gamma == 0:
+                # Use classic Rocchio $$q_{opt} = \mu(D_r) + (\mu(D_r) - \mu(D_{nr}))$$
+                query = relevant + (relevant - non_relevant)
+            else:
+                # Rocchio SMART
+                query = self._alpha * query_weights + self._beta * relevant - self._gamma * non_relevant
+            query = csr_matrix(query)
         else:
-            query = [query]
-        query_weights = self.transform(query, query=True)
-        ranking = query_weights * weights.T
+            query = query_weights
+
+        ranking = query * document_weights.T
         top_k_indices, top_k_sims = top_k_csr(ranking.data, ranking.indices, ranking.indptr, k)
         return top_k_indices.squeeze(), top_k_sims.squeeze()

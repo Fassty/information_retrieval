@@ -5,6 +5,17 @@ import numpy as np
 import numba as nb
 
 
+def product_dict(**kwargs):
+    keys = kwargs.keys()
+    vals = kwargs.values()
+    for instance in itertools.product(*vals):
+        yield dict(zip(keys, instance))
+
+
+def dict_to_str(dct, sep='_'):
+    return sep.join([f'{k}={v}' for k, v in dct.items()])
+
+
 def logn(x, base: Union[int, float] = np.e):
     assert base > 0
     if base == 2:
